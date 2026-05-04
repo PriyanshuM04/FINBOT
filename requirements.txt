@@ -1,0 +1,60 @@
+# Web Framework
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+
+# WhatsApp/ Twilio
+twilio==9.0.5
+
+# Database
+sqlalchemy==2.0.30
+pymysql==1.1.0
+cryptography==42.0.7
+
+# Caching
+redis==5.0.4
+
+# Task Queue
+celery==5.4.0
+
+# OCR & Image Processing
+easyocr==1.7.1
+opencv-python-headless==4.9.0.80
+
+# PDF Parsing
+pymupdf==1.24.3
+
+# NLP & Parsing
+# spacy==3.7.4
+regex==2024.4.28
+
+# ML / Categorization
+scikit-learn==1.4.2
+numpy==1.26.4
+joblib==1.4.0
+
+# Environment & Config
+python-dotenv==1.0.1
+pydantic-settings==2.2.1
+
+# File Uploads
+cloudinary==1.40.0
+
+# HTTP Client (internal service calls)
+httpx==0.27.0
+
+# Multipart form parsing (Twilio sends form data)
+python-multipart==0.0.9
+
+# Scheduling (Sunday reports, monthly summaries)
+celery[redis]==5.4.0
+APScheduler==3.10.4
+
+#Utilities
+pillow==10.4.0
+python-dateutil==2.9.0
+phonenumbers==8.13.37
+
+# Dev & Testing
+pytest==8.2.0
+pytest-asyncio==0.23.6
+httpx==0.27.0
