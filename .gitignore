@@ -220,3 +220,6 @@ __marimo__/
 # FinBot specific
 sample_data/
 app/ml/models/
+
+# ngrok
+ngrok.exe
