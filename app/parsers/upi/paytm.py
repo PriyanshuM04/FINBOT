@@ -5,15 +5,11 @@ from app.parsers.upi.normalizer import ParsedTransaction, normalize
 
 class PaytmParser(BaseUPIParser):
     """
-    Paytm OCR fingerprints:
-      - "payim" or "paytm" (OCR misreads logo)
-      - "Paid Successfully" / "Money Received"
-      - "Rupees X Only" — word-form amount (most reliable)
-      - "To: MerchantName" / "From: SenderName"
-      - "UPI Ref No:" or "Upi Ref No:"
+    Paytm fingerprints:
+      History: "payim"/"paytm" + "Paid Successfully"/"Money Received" + "Rupees X Only"
+      Live:    "payim"/"paytm" + "Payment Successful" + standalone amount
     """
 
-    # Words that can appear in word-amount: "Rupees One Hundred Thirty Only"
     WORD_NUMBERS = {
         "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
         "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
@@ -35,40 +31,50 @@ class PaytmParser(BaseUPIParser):
     def parse(self, texts: list[str]) -> ParsedTransaction | None:
         cleaned = self._clean_texts(texts)
 
-        # Transaction type
+        # Transaction type — handle both history and live labels
         transaction_type = "debit"
         for t in cleaned:
-            if "money received" in t or "received" in t:
+            if "money received" in t or ("received" in t and "from" not in t):
                 transaction_type = "credit"
                 break
-            if "paid successfully" in t or "paid" in t:
+            if "paid successfully" in t or "payment successful" in t:
                 transaction_type = "debit"
                 break
 
-        # Amount — try word form first (most reliable for Paytm)
+        # Amount — try word form first (history), then standalone number (live)
         amount = self._parse_word_amount(texts)
+        if amount is None:
+            amount = self._find_paytm_amount(texts, cleaned)
         if amount is None:
             amount = self._find_amount(texts)
 
         # Merchant/sender name
         merchant_name = None
         for i, t in enumerate(cleaned):
-            if t.startswith("to:") and transaction_type == "debit":
-                raw = texts[i].replace("To:", "").replace("to:", "").strip()
+            if transaction_type == "debit" and t.startswith("to:"):
+                raw = texts[i].split(":", 1)[-1].strip()
                 merchant_name = raw
                 break
-            if t.startswith("from:") and transaction_type == "credit":
-                raw = texts[i].replace("From:", "").replace("from:", "").strip()
+            if transaction_type == "credit" and t.startswith("from:"):
+                raw = texts[i].split(":", 1)[-1].strip()
                 merchant_name = raw
                 break
 
-        # UPI ID
-        upi_id = self._find_upi_id(texts)
+        # UPI ID — from "UPI ID: xxx" label in live, or inline in history
+        upi_id = None
+        for i, t in enumerate(cleaned):
+            if "upi id:" in t or "upi id" in t:
+                m = re.search(r"[\w.\-]+@[\w]+", texts[i])
+                if m:
+                    upi_id = m.group(0).rstrip("'")
+                break
+        if not upi_id:
+            upi_id = self._find_upi_id(texts)
 
-        # Transaction ref
+        # Transaction ref — "UPI Ref No:", "Ref: No:", "Upi Ref No:"
         transaction_id = None
         for i, t in enumerate(cleaned):
-            if "upi ref no" in t:
+            if "ref" in t and "no" in t:
                 m = re.search(r"\d{10,}", texts[i])
                 if m:
                     transaction_id = m.group(0)
@@ -102,11 +108,20 @@ class PaytmParser(BaseUPIParser):
             transaction_id=transaction_id,
         )
 
+    def _find_paytm_amount(self, texts: list[str], cleaned: list[str]) -> float | None:
+        """Live Paytm shows standalone number like '33' near top."""
+        for text in texts[:5]:
+            m = re.match(r"^[₹R]?(\d{1,6}(?:[.,]\d{1,2})?)$", text.strip())
+            if m:
+                try:
+                    val = float(m.group(1).replace(",", "."))
+                    if 0 < val < 100000:
+                        return val
+                except ValueError:
+                    pass
+        return None
+
     def _parse_word_amount(self, texts: list[str]) -> float | None:
-        """
-        Parses 'Rupees One Hundred Thirty Only' → 130.0
-        Paytm always includes this line — very reliable.
-        """
         for text in texts:
             if "rupees" in text.lower() and "only" in text.lower():
                 words = re.sub(r"[^a-zA-Z\s]", "", text).lower().split()
