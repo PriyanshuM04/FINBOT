@@ -6,13 +6,13 @@ import enum
 
 
 class CategoryEnum(str, enum.Enum):
-    food        = "Food"
-    travel      = "Travel"
-    shopping    = "Shopping"
-    medicine    = "Medicine"
+    food          = "Food"
+    travel        = "Travel"
+    shopping      = "Shopping"
+    health        = "Health"
+    bills         = "Bills"
     entertainment = "Entertainment"
-    utilities   = "Utilities"
-    other       = "Other"
+    other         = "Other"
 
 
 class User(Base):
