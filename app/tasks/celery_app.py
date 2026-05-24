@@ -4,7 +4,7 @@ celery = Celery(
     "finbot",
     broker="redis://localhost:6379/0",
     backend="redis://localhost:6379/0",
-    include=["app.tasks.image_tasks"],
+    include=["app.tasks.image_tasks", "app.tasks.report_tasks"],
 )
 
 celery.conf.update(

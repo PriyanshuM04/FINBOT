@@ -12,24 +12,24 @@ from app.bot.conversation import set_pending_confirmation
 from twilio.rest import Client
 
 CATEGORY_KEYWORDS = {
-    "Food":          ["swiggy", "zomato", "domino", "pizza", "food", "cafe",
+    "food":          ["swiggy", "zomato", "domino", "pizza", "food", "cafe",
                       "restaurant", "chai", "biryani", "hotel"],
-    "Travel":        ["irctc", "uber", "ola", "rapido", "redbus", "petrol",
+    "travel":        ["irctc", "uber", "ola", "rapido", "redbus", "petrol",
                       "fuel", "cab", "auto", "parking", "railway"],
-    "Shopping":      ["amazon", "flipkart", "myntra", "ajio", "meesho",
+    "shopping":      ["amazon", "flipkart", "myntra", "ajio", "meesho",
                       "mall", "store", "mart"],
-    "Health":        ["pharmacy", "medical", "chemist", "hospital", "clinic",
+    "health":        ["pharmacy", "medical", "chemist", "hospital", "clinic",
                       "doctor", "lab", "apollo", "medplus"],
-    "Bills":         ["electricity", "jio", "airtel", "bsnl", "recharge",
+    "bills":         ["electricity", "jio", "airtel", "bsnl", "recharge",
                       "netflix", "spotify", "prime", "hotstar",
                       "water", "gas", "rent"],
-    "Entertainment": ["bookmyshow", "pvr", "inox", "cinema", "movie",
+    "entertainment": ["bookmyshow", "pvr", "inox", "cinema", "movie",
                       "game", "sport"],
 }
 
 CATEGORY_EMOJIS = {
-    "Food": "🍔", "Travel": "🚗", "Shopping": "🛍️",
-    "Health": "💊", "Bills": "💡", "Entertainment": "🎬", "Other": "📦"
+    "food": "🍔", "travel": "🚗", "shopping": "🛍️",
+    "health": "💊", "bills": "💡", "entertainment": "🎬", "other": "📦"
 }
 
 
@@ -77,7 +77,7 @@ def suggest_category(merchant_name: str, upi_id: str) -> str:
         for kw in keywords:
             if kw in text:
                 return category
-    return "Other"
+    return "other"
 
 
 @celery.task(name="process_upi_screenshot")
@@ -116,21 +116,20 @@ def process_upi_screenshot(sender: str, media_url: str):
                 f"Please type manually: *150 {result.merchant_name or 'expense'}*")
             return
 
-        upi_id   = result.upi_id or result.merchant_name or result.app_source
-        merchant = result.merchant_name or result.upi_id or "Unknown merchant"
+        upi_id    = result.upi_id or result.merchant_name or result.app_source
+        merchant  = result.merchant_name or result.upi_id or "Unknown merchant"
         txn_emoji = "💸" if result.transaction_type == "debit" else "💰"
         direction = "paid to" if result.transaction_type == "debit" else "received from"
 
-        # Check known merchant for suggested category
+        # Check known merchant
         known = get_permanent_merchant(sender, upi_id)
         if not known:
             known = get_merchant(sender, upi_id)
 
-        # Always ask confirmation — known merchants get category pre-filled
         suggested = known["category"] if known else suggest_category(merchant, upi_id)
-        emoji = CATEGORY_EMOJIS.get(suggested, "📦")
+        emoji     = CATEGORY_EMOJIS.get(suggested, "📦")
 
-        # Store pending confirmation state
+        # Always ask confirmation
         set_pending_confirmation(
             sender,
             upi_id=upi_id,
@@ -145,7 +144,7 @@ def process_upi_screenshot(sender: str, media_url: str):
         send_whatsapp(sender,
             f"{txn_emoji} *₹{result.amount:.0f}* {direction} *{merchant}*\n"
             f"App: {result.app_source.upper()}\n"
-            f"Category: {suggested} {emoji}{known_tag}\n\n"
+            f"Category: {suggested.title()} {emoji}{known_tag}\n\n"
             f"Reply *yes* to save  |  Reply *no* to correct")
 
     except Exception as e:

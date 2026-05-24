@@ -1,25 +1,42 @@
 import re
+import json
 from sqlalchemy.orm import Session
 from app.db.database import SessionLocal
 from app.db.models import User, Transaction, CategoryEnum
 from app.cache.merchant_cache import set_merchant, record_appearance
 from app.cache.promoter import check_and_promote
+from app.cache.redis_client import get_redis
 from app.bot.conversation import (
     get_pending_state, clear_pending_state, set_pending_category
 )
 
 EXPENSE_PATTERN = re.compile(r"^₹?(\d+(?:\.\d{1,2})?)\s*(.*)?$")
 
-# For manual correction: "100 food", "192.7 travel"
 CORRECTION_PATTERN = re.compile(
     r"^₹?(\d+(?:\.\d{1,2})?)\s+(food|travel|shopping|health|bills|entertainment|other)$",
     re.IGNORECASE
 )
 
-CATEGORY_EMOJIS = {
-    "Food": "🍔", "Travel": "🚗", "Shopping": "🛍️",
-    "Health": "💊", "Bills": "💡", "Entertainment": "🎬", "Other": "📦"
+CATEGORY_MAP = {
+    "1": "food", "2": "travel", "3": "shopping",
+    "4": "health", "5": "bills", "6": "entertainment", "7": "other"
 }
+
+CATEGORY_EMOJIS = {
+    "food": "🍔", "travel": "🚗", "shopping": "🛍️",
+    "health": "💊", "bills": "💡", "entertainment": "🎬", "other": "📦"
+}
+
+CATEGORY_MENU = (
+    "Which category is correct?\n\n"
+    "1 - Food 🍔\n"
+    "2 - Travel 🚗\n"
+    "3 - Shopping 🛍️\n"
+    "4 - Health 💊\n"
+    "5 - Bills 💡\n"
+    "6 - Entertainment 🎬\n"
+    "7 - Other 📦"
+)
 
 CORRECTION_PROMPT = (
     "❌ Please type the correct amount and category:\n\n"
@@ -76,18 +93,19 @@ async def handle_text_command(sender: str, body: str) -> str:
             "👋 Welcome to *FinBot*!\n\n"
             "• Send *40 chai* to log an expense\n"
             "• Forward a *UPI screenshot* to auto-log\n"
-            "• Send *report* for your dashboard\n\n"
+            "• Send *report* for your weekly summary\n\n"
             "Let's start tracking! 💰"
         )
 
     if lower == "report":
-        return "📊 Dashboard coming in Phase 5!"
+        from app.intelligence.report_builder import get_weekly_summary
+        return get_weekly_summary(sender)
 
     match = EXPENSE_PATTERN.match(body.strip())
     if match:
         amount = float(match.group(1))
         description = match.group(2).strip() if match.group(2) else "expense"
-        save_transaction(sender, amount, "Other", description, "text", body)
+        save_transaction(sender, amount, "other", description, "text", body)
         return f"✅ Logged ₹{amount:.0f} for *{description}*"
 
     return (
@@ -99,11 +117,7 @@ async def handle_text_command(sender: str, body: str) -> str:
 
 async def _handle_confirmation(sender: str, body: str,
                                 lower: str, state: dict) -> str:
-    """
-    yes → log with suggested category, cache merchant
-    no  → ask user to type corrected amount + category together
-    """
-    if lower in ("yes", "y", "✅", "correct", "ok", "okay"):
+    if lower in ("yes", "y", "correct", "ok", "okay"):
         clear_pending_state(sender)
 
         set_merchant(sender, state["upi_id"], state["category"])
@@ -122,15 +136,11 @@ async def _handle_confirmation(sender: str, body: str,
         emoji = CATEGORY_EMOJIS.get(state["category"], "📦")
         return (
             f"✅ Logged ₹{state['amount']:.0f} for *{state['merchant_name']}*\n"
-            f"Category: {state['category']} {emoji}\n\n"
+            f"Category: {state['category'].title()} {emoji}\n\n"
             f"🧠 I'll remember *{state['merchant_name']}* next time!"
         )
 
-    if lower in ("no", "n", "❌", "wrong"):
-        # Switch to correction state — keep merchant data
-        from app.bot.conversation import set_pending_state_raw
-        import json
-        from app.cache.redis_client import get_redis
+    if lower in ("no", "n", "wrong"):
         correction_state = {
             "type": "awaiting_correction",
             "upi_id": state["upi_id"],
@@ -140,37 +150,27 @@ async def _handle_confirmation(sender: str, body: str,
         }
         r = get_redis()
         r.setex(f"pending:{sender}", 600, json.dumps(correction_state))
-
         return CORRECTION_PROMPT
 
     return (
         f"Please reply *yes* to save or *no* to correct.\n\n"
         f"💸 ₹{state['amount']:.0f} to *{state['merchant_name']}* "
-        f"— Category: {state['category']}"
+        f"— Category: {state['category'].title()}"
     )
 
 
 async def _handle_correction(sender: str, body: str,
                               lower: str, state: dict) -> str:
-    """
-    User types corrected amount + category e.g. '100 food' or '192.7 travel'
-    """
     match = CORRECTION_PATTERN.match(body.strip())
 
     if not match:
         return CORRECTION_PROMPT
 
     amount   = float(match.group(1))
-    category = match.group(2).capitalize()
-    # Normalize "Bills" etc
-    NORM = {"Food": "Food", "Travel": "Travel", "Shopping": "Shopping",
-            "Health": "Health", "Bills": "Bills",
-            "Entertainment": "Entertainment", "Other": "Other"}
-    category = NORM.get(category, "Other")
+    category = match.group(2).lower()
 
     clear_pending_state(sender)
 
-    # Cache with corrected category
     set_merchant(sender, state["upi_id"], category)
     record_appearance(sender, state["upi_id"])
     check_and_promote(sender, state["upi_id"], category)
@@ -187,8 +187,8 @@ async def _handle_correction(sender: str, body: str,
     emoji = CATEGORY_EMOJIS.get(category, "📦")
     return (
         f"✅ Logged ₹{amount:.0f} for *{state['merchant_name']}*\n"
-        f"Category: {category} {emoji}\n\n"
-        f"🧠 I'll remember *{state['merchant_name']}* as {category} next time!"
+        f"Category: {category.title()} {emoji}\n\n"
+        f"🧠 I'll remember *{state['merchant_name']}* as {category.title()} next time!"
     )
 
 
