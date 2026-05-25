@@ -9,6 +9,8 @@ from app.cache.redis_client import get_redis
 from app.bot.conversation import (
     get_pending_state, clear_pending_state, set_pending_category
 )
+import hashlib
+from app.config import settings
 
 EXPENSE_PATTERN = re.compile(r"^₹?(\d+(?:\.\d{1,2})?)\s*(.*)?$")
 
@@ -97,9 +99,14 @@ async def handle_text_command(sender: str, body: str) -> str:
             "Let's start tracking! 💰"
         )
 
-    if lower == "report":
+    if lower == "report":        
+        token = hashlib.sha256(sender.encode()).hexdigest()[:16]
+        # Use your ngrok URL here
+        base_url = "https://repossess-haiku-bagel.ngrok-free.dev"
+        link = f"{base_url}/dashboard/{token}"
         from app.intelligence.report_builder import get_weekly_summary
-        return get_weekly_summary(sender)
+        summary = get_weekly_summary(sender)
+        return f"{summary}\n\n📱 *Full Dashboard:*\n{link}"
 
     match = EXPENSE_PATTERN.match(body.strip())
     if match:

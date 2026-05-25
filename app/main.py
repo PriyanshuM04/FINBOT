@@ -5,6 +5,8 @@ from app.db.database import engine, Base
 from app.bot.handler import handle_message
 from app.ocr.extractor import get_reader
 import app.db.models  # noqa: F401 — ensures models are registered before create_all
+from app.dashboard.routes import router as dashboard_router
+from fastapi.staticfiles import StaticFiles
 
 
 @asynccontextmanager
@@ -24,6 +26,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.include_router(dashboard_router)
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 
 @app.get("/")
