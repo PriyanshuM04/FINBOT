@@ -52,3 +52,4 @@ services:
   - type: redis
     name: finbot-redis
     plan: free
+    ipAllowList: []
