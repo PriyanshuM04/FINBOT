@@ -3,7 +3,7 @@ from fastapi.responses import PlainTextResponse
 from contextlib import asynccontextmanager
 from app.db.database import engine, Base
 from app.bot.handler import handle_message
-from app.ocr.extractor import get_reader
+# from app.ocr.extractor import get_reader
 import app.db.models  # noqa: F401 — ensures models are registered before create_all
 from app.dashboard.routes import router as dashboard_router
 from fastapi.staticfiles import StaticFiles
@@ -14,8 +14,8 @@ async def lifespan(app: FastAPI):
     # Creates all tables on startup if they don't exist
     Base.metadata.create_all(bind=engine)
     print("✅ Database tables ready")
-    get_reader()
-    print("✅ EasyOCR model ready")
+    # get_reader()
+    # print("✅ EasyOCR model ready")
     yield
     print("👋 Shutting down FinBot")
 

@@ -1,0 +1,16 @@
+# Web service only — no OCR/ML packages
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+twilio==9.0.5
+sqlalchemy==2.0.30
+pymysql==1.1.1
+cryptography==42.0.8
+redis==5.0.4
+celery[redis]==5.4.0
+httpx==0.27.0
+python-multipart==0.0.9
+python-dotenv==1.0.1
+pydantic-settings==2.2.1
+aiofiles==23.2.1
+python-dateutil==2.9.0
+APScheduler==3.10.4

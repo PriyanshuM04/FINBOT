@@ -3,7 +3,7 @@ services:
   - type: web
     name: finbot-api
     runtime: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.web
     envVars:
       - key: TWILIO_ACCOUNT_SID
         sync: false
@@ -27,7 +27,7 @@ services:
   - type: worker
     name: finbot-worker
     runtime: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.worker
     dockerCommand: celery -A app.tasks.celery_app worker --loglevel=info --pool=solo
     envVars:
       - key: TWILIO_ACCOUNT_SID
