@@ -102,7 +102,7 @@ async def handle_text_command(sender: str, body: str) -> str:
     if lower == "report":        
         token = hashlib.sha256(sender.encode()).hexdigest()[:16]
         # Use your ngrok URL here
-        base_url = "https://repossess-haiku-bagel.ngrok-free.dev"
+        base_url = "https://finbot-api-d5le.onrender.com"
         link = f"{base_url}/dashboard/{token}"
         from app.intelligence.report_builder import get_weekly_summary
         summary = get_weekly_summary(sender)
