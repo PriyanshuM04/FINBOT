@@ -1,5 +1,6 @@
 import re
 import json
+import hashlib
 from sqlalchemy.orm import Session
 from app.db.database import SessionLocal
 from app.db.models import User, Transaction, CategoryEnum
@@ -7,21 +8,42 @@ from app.cache.merchant_cache import set_merchant, record_appearance
 from app.cache.promoter import check_and_promote
 from app.cache.redis_client import get_redis
 from app.bot.conversation import (
-    get_pending_state, clear_pending_state, set_pending_category
+    get_pending_state, clear_pending_state
 )
-import hashlib
 from app.config import settings
 
-EXPENSE_PATTERN = re.compile(r"^₹?(\d+(?:\.\d{1,2})?)\s*(.*)?$")
+# Handles "10 chai" and also "chai 10"
+EXPENSE_PATTERN = re.compile(
+    r"^₹?(\d+(?:\.\d{1,2})?)\s+(.+)$|^(.+?)\s+₹?(\d+(?:\.\d{1,2})?)$",
+    re.IGNORECASE
+)
 
 CORRECTION_PATTERN = re.compile(
     r"^₹?(\d+(?:\.\d{1,2})?)\s+(food|travel|shopping|health|bills|entertainment|other)$",
     re.IGNORECASE
 )
 
-CATEGORY_MAP = {
-    "1": "food", "2": "travel", "3": "shopping",
-    "4": "health", "5": "bills", "6": "entertainment", "7": "other"
+CATEGORY_KEYWORDS = {
+    "food":          ["swiggy", "zomato", "domino", "pizza", "food", "cafe",
+                      "restaurant", "chai", "biryani", "hotel", "dhaba",
+                      "bakery", "juice", "snack", "eat", "lunch", "dinner",
+                      "breakfast", "pav", "bhaji", "maggi", "tea", "coffee"],
+    "travel":        ["irctc", "uber", "ola", "rapido", "redbus", "petrol",
+                      "fuel", "cab", "auto", "parking", "railway", "bus",
+                      "metro", "flight", "indigo", "spicejet", "train",
+                      "ticket", "toll"],
+    "shopping":      ["amazon", "flipkart", "myntra", "ajio", "meesho",
+                      "mall", "store", "mart", "shop", "bazar", "market",
+                      "cloth", "dress", "shoes", "bag"],
+    "health":        ["pharmacy", "medical", "chemist", "hospital", "clinic",
+                      "doctor", "lab", "apollo", "medplus", "netmeds",
+                      "1mg", "medicine", "pharma", "health", "gym"],
+    "bills":         ["electricity", "jio", "airtel", "bsnl", "recharge",
+                      "netflix", "spotify", "prime", "hotstar", "disney",
+                      "water", "gas", "rent", "broadband", "wifi", "bill",
+                      "mobile", "phone", "dth", "insurance"],
+    "entertainment": ["bookmyshow", "pvr", "inox", "cinema", "movie",
+                      "game", "sport", "concert", "event", "show"],
 }
 
 CATEGORY_EMOJIS = {
@@ -29,23 +51,21 @@ CATEGORY_EMOJIS = {
     "health": "💊", "bills": "💡", "entertainment": "🎬", "other": "📦"
 }
 
-CATEGORY_MENU = (
-    "Which category is correct?\n\n"
-    "1 - Food 🍔\n"
-    "2 - Travel 🚗\n"
-    "3 - Shopping 🛍️\n"
-    "4 - Health 💊\n"
-    "5 - Bills 💡\n"
-    "6 - Entertainment 🎬\n"
-    "7 - Other 📦"
-)
-
 CORRECTION_PROMPT = (
     "❌ Please type the correct amount and category:\n\n"
     "*Example: 100 food* or *192 travel*\n\n"
     "Categories: food, travel, shopping,\n"
     "health, bills, entertainment, other"
 )
+
+
+def suggest_category_from_text(text: str) -> str:
+    text = text.lower()
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return category
+    return "other"
 
 
 def get_or_create_user(db: Session, phone_number: str) -> User:
@@ -93,27 +113,37 @@ async def handle_text_command(sender: str, body: str) -> str:
     if lower in ("help", "hi", "hello", "start"):
         return (
             "👋 Welcome to *FinBot*!\n\n"
-            "• Send *40 chai* to log an expense\n"
+            "• Send *40 chai* or *chai 40* to log an expense\n"
             "• Forward a *UPI screenshot* to auto-log\n"
             "• Send *report* for your weekly summary\n\n"
             "Let's start tracking! 💰"
         )
 
-    if lower == "report":        
+    if lower == "report":
         token = hashlib.sha256(sender.encode()).hexdigest()[:16]
-        # Use your ngrok URL here
         base_url = "https://finbot-api-d5le.onrender.com"
         link = f"{base_url}/dashboard/{token}"
         from app.intelligence.report_builder import get_weekly_summary
         summary = get_weekly_summary(sender)
         return f"{summary}\n\n📱 *Full Dashboard:*\n{link}"
 
+    # ── Expense logging — handles "10 chai" and "chai 10" ─────────
     match = EXPENSE_PATTERN.match(body.strip())
     if match:
-        amount = float(match.group(1))
-        description = match.group(2).strip() if match.group(2) else "expense"
-        save_transaction(sender, amount, "other", description, "text", body)
-        return f"✅ Logged ₹{amount:.0f} for *{description}*"
+        if match.group(1):  # "10 chai" format
+            amount = float(match.group(1))
+            description = match.group(2).strip()
+        else:               # "chai 10" format
+            amount = float(match.group(4))
+            description = match.group(3).strip()
+
+        if not description:
+            description = "expense"
+
+        category = suggest_category_from_text(description)
+        emoji = CATEGORY_EMOJIS.get(category, "📦")
+        save_transaction(sender, amount, category, description, "text", body)
+        return f"✅ Logged ₹{amount:.0f} for *{description}* · {category.title()} {emoji}"
 
     return (
         "❓ Didn't catch that. Try:\n"
@@ -200,6 +230,5 @@ async def _handle_correction(sender: str, body: str,
 
 
 async def handle_image_command(sender: str, media_url: str) -> str:
-    from app.tasks.image_tasks import process_upi_screenshot
-    process_upi_screenshot.delay(sender, media_url)
+    # Kept for compatibility — actual processing now via BackgroundTasks in main.py
     return "⏳ Processing your screenshot..."

@@ -1,21 +1,17 @@
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 from contextlib import asynccontextmanager
 from app.db.database import engine, Base
 from app.bot.handler import handle_message
-# from app.ocr.extractor import get_reader
-import app.db.models  # noqa: F401 — ensures models are registered before create_all
+import app.db.models  # noqa: F401
 from app.dashboard.routes import router as dashboard_router
 from fastapi.staticfiles import StaticFiles
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Creates all tables on startup if they don't exist
     Base.metadata.create_all(bind=engine)
     print("✅ Database tables ready")
-    # get_reader()
-    # print("✅ EasyOCR model ready")
     yield
     print("👋 Shutting down FinBot")
 
@@ -37,26 +33,36 @@ def root():
 
 @app.post("/webhook", response_class=PlainTextResponse)
 async def whatsapp_webhook(
+    background_tasks: BackgroundTasks,
     request: Request,
-    From: str = Form(...),       # sender's WhatsApp number e.g. whatsapp:+919876543210
-    Body: str = Form(default=""),  # text message body
-    NumMedia: int = Form(default=0),  # number of media attachments
-    MediaUrl0: str = Form(default=None),   # first media URL if any
-    MediaContentType0: str = Form(default=None),  # media MIME type
+    From: str = Form(...),
+    Body: str = Form(default=""),
+    NumMedia: int = Form(default=0),
+    MediaUrl0: str = Form(default=None),
+    MediaContentType0: str = Form(default=None),
 ):
-    """
-    Twilio calls this endpoint every time a WhatsApp message arrives.
-    Returns TwiML — empty string means no immediate reply (bot replies async).
-    """
+    sender = From
+    body = Body.strip()
+
+    # Image message — acknowledge immediately, process in background
+    if NumMedia > 0 and MediaUrl0:
+        from app.tasks.image_tasks import process_upi_screenshot_bg
+        background_tasks.add_task(process_upi_screenshot_bg, sender, MediaUrl0)
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Message>⏳ Processing your screenshot...</Message>
+</Response>"""
+        return PlainTextResponse(content=twiml, media_type="application/xml")
+
+    # Text message — handle normally
     reply = await handle_message(
-        sender=From,
-        body=Body.strip(),
+        sender=sender,
+        body=body,
         num_media=NumMedia,
         media_url=MediaUrl0,
         media_type=MediaContentType0,
     )
 
-    # Twilio expects TwiML — plain text reply wrapped in Message tag
     if reply:
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -64,7 +70,6 @@ async def whatsapp_webhook(
 </Response>"""
         return PlainTextResponse(content=twiml, media_type="application/xml")
 
-    # No reply — return empty TwiML
     return PlainTextResponse(
         content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
         media_type="application/xml"

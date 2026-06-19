@@ -1,5 +1,4 @@
 import httpx
-from app.tasks.celery_app import celery
 from app.ocr.preprocessor import preprocess_image_bytes
 from app.ocr.extractor import extract_text
 from app.parsers.upi.router import parse_upi_screenshot
@@ -13,18 +12,21 @@ from twilio.rest import Client
 
 CATEGORY_KEYWORDS = {
     "food":          ["swiggy", "zomato", "domino", "pizza", "food", "cafe",
-                      "restaurant", "chai", "biryani", "hotel"],
+                      "restaurant", "chai", "biryani", "hotel", "dhaba",
+                      "bakery", "juice", "snack", "eat", "lunch", "dinner"],
     "travel":        ["irctc", "uber", "ola", "rapido", "redbus", "petrol",
-                      "fuel", "cab", "auto", "parking", "railway"],
+                      "fuel", "cab", "auto", "parking", "railway", "bus",
+                      "metro", "flight", "indigo", "spicejet"],
     "shopping":      ["amazon", "flipkart", "myntra", "ajio", "meesho",
-                      "mall", "store", "mart"],
+                      "mall", "store", "mart", "shop", "bazar", "market"],
     "health":        ["pharmacy", "medical", "chemist", "hospital", "clinic",
-                      "doctor", "lab", "apollo", "medplus"],
+                      "doctor", "lab", "apollo", "medplus", "netmeds",
+                      "1mg", "medicine", "pharma"],
     "bills":         ["electricity", "jio", "airtel", "bsnl", "recharge",
-                      "netflix", "spotify", "prime", "hotstar",
-                      "water", "gas", "rent"],
+                      "netflix", "spotify", "prime", "hotstar", "disney",
+                      "water", "gas", "rent", "broadband", "wifi"],
     "entertainment": ["bookmyshow", "pvr", "inox", "cinema", "movie",
-                      "game", "sport"],
+                      "game", "sport", "ticket"],
 }
 
 CATEGORY_EMOJIS = {
@@ -80,8 +82,11 @@ def suggest_category(merchant_name: str, upi_id: str) -> str:
     return "other"
 
 
-@celery.task(name="process_upi_screenshot")
-def process_upi_screenshot(sender: str, media_url: str):
+def process_upi_screenshot_bg(sender: str, media_url: str):
+    """
+    Runs as FastAPI BackgroundTask — no Celery needed.
+    Sends result back via WhatsApp after processing.
+    """
     try:
         response = httpx.get(
             media_url,
@@ -121,7 +126,6 @@ def process_upi_screenshot(sender: str, media_url: str):
         txn_emoji = "💸" if result.transaction_type == "debit" else "💰"
         direction = "paid to" if result.transaction_type == "debit" else "received from"
 
-        # Check known merchant
         known = get_permanent_merchant(sender, upi_id)
         if not known:
             known = get_merchant(sender, upi_id)
@@ -129,7 +133,6 @@ def process_upi_screenshot(sender: str, media_url: str):
         suggested = known["category"] if known else suggest_category(merchant, upi_id)
         emoji     = CATEGORY_EMOJIS.get(suggested, "📦")
 
-        # Always ask confirmation
         set_pending_confirmation(
             sender,
             upi_id=upi_id,
@@ -149,5 +152,6 @@ def process_upi_screenshot(sender: str, media_url: str):
 
     except Exception as e:
         send_whatsapp(sender,
-            "⚠️ Something went wrong. Please try again or type manually: *150 groceries*")
-        raise
+            "⚠️ Something went wrong processing your screenshot.\n"
+            "Please try again or type manually: *150 groceries*")
+        print(f"OCR error for {sender}: {e}")
