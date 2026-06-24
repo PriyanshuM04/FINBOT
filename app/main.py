@@ -74,3 +74,10 @@ async def whatsapp_webhook(
         content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
         media_type="application/xml"
     )
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    from app.bot.telegram_handler import process_telegram_update
+    update_data = await request.json()
+    await process_telegram_update(update_data)
+    return {"ok": True}

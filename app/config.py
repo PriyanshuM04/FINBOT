@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "changeme"
     ENVIRONMENT: str = "development"
 
+    # Telegram
+    TELEGRAM_BOT_TOKEN: str = ""
+    OCR_SPACE_API_KEY: str = ""
+
     class Config:
         env_file = ".env"
 
