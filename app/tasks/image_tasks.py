@@ -1,6 +1,9 @@
+"""
+Image processing using OCR.space API instead of EasyOCR.
+No local model loading — works within Render free tier memory limits.
+"""
 import httpx
-from app.ocr.preprocessor import preprocess_image_bytes
-from app.ocr.extractor import extract_text
+from app.ocr.extractor_ocrspace import extract_text_from_url
 from app.parsers.upi.router import parse_upi_screenshot
 from app.db.database import SessionLocal
 from app.db.models import User, Transaction, CategoryEnum
@@ -13,20 +16,23 @@ from twilio.rest import Client
 CATEGORY_KEYWORDS = {
     "food":          ["swiggy", "zomato", "domino", "pizza", "food", "cafe",
                       "restaurant", "chai", "biryani", "hotel", "dhaba",
-                      "bakery", "juice", "snack", "eat", "lunch", "dinner"],
+                      "bakery", "juice", "snack", "eat", "lunch", "dinner",
+                      "breakfast", "pav", "bhaji", "maggi", "tea", "coffee"],
     "travel":        ["irctc", "uber", "ola", "rapido", "redbus", "petrol",
                       "fuel", "cab", "auto", "parking", "railway", "bus",
-                      "metro", "flight", "indigo", "spicejet"],
+                      "metro", "flight", "indigo", "spicejet", "train", "toll"],
     "shopping":      ["amazon", "flipkart", "myntra", "ajio", "meesho",
-                      "mall", "store", "mart", "shop", "bazar", "market"],
+                      "mall", "store", "mart", "shop", "bazar", "market",
+                      "cloth", "dress", "shoes", "bag"],
     "health":        ["pharmacy", "medical", "chemist", "hospital", "clinic",
                       "doctor", "lab", "apollo", "medplus", "netmeds",
-                      "1mg", "medicine", "pharma"],
+                      "1mg", "medicine", "pharma", "health", "gym"],
     "bills":         ["electricity", "jio", "airtel", "bsnl", "recharge",
                       "netflix", "spotify", "prime", "hotstar", "disney",
-                      "water", "gas", "rent", "broadband", "wifi"],
+                      "water", "gas", "rent", "broadband", "wifi", "bill",
+                      "mobile", "phone", "dth", "insurance"],
     "entertainment": ["bookmyshow", "pvr", "inox", "cinema", "movie",
-                      "game", "sport", "ticket"],
+                      "game", "sport", "concert", "event", "show"],
 }
 
 CATEGORY_EMOJIS = {
@@ -83,21 +89,14 @@ def suggest_category(merchant_name: str, upi_id: str) -> str:
 
 
 def process_upi_screenshot_bg(sender: str, media_url: str):
-    """
-    Runs as FastAPI BackgroundTask — no Celery needed.
-    Sends result back via WhatsApp after processing.
-    """
+    """Runs as FastAPI BackgroundTask."""
     try:
-        response = httpx.get(
+        # Extract text via OCR.space API — no local model needed
+        texts = extract_text_from_url(
             media_url,
-            auth=(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN),
-            follow_redirects=True,
-            timeout=30.0,
+            settings.TWILIO_ACCOUNT_SID,
+            settings.TWILIO_AUTH_TOKEN,
         )
-        response.raise_for_status()
-
-        processed = preprocess_image_bytes(response.content)
-        texts = extract_text(processed)
 
         if not texts:
             send_whatsapp(sender,
