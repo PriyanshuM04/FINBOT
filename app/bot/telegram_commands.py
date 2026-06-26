@@ -285,3 +285,24 @@ async def _handle_correction(sender: str, body: str, lower: str, state: dict) ->
         ),
         "keyboard": None,
     }
+
+async def _clear_user_data(sender: str) -> dict:
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.phone_number == sender).first()
+        if user:
+            db.query(Transaction).filter(Transaction.user_id == user.id).delete()
+            db.commit()
+        # Also clear Redis cache for this user
+        r = get_redis()
+        for key in r.scan_iter(f"merchant:{sender}:*"):
+            r.delete(key)
+        for key in r.scan_iter(f"perm_merchant:{sender}:*"):
+            r.delete(key)
+        clear_pending_state(sender)
+    finally:
+        db.close()
+    return {
+        "text": "✅ All your transactions have been cleared. Fresh start! 💪",
+        "keyboard": None,
+    }
