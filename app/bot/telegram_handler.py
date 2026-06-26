@@ -10,7 +10,9 @@ from app.config import settings
 from app.bot.conversation import get_pending_state, set_pending_confirmation
 from app.bot.telegram_commands import handle_start, handle_text, handle_callback
 
-bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+# bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+def get_bot() -> Bot:
+    return Bot(token=settings.TELEGRAM_BOT_TOKEN)
 
 
 def get_telegram_sender(update_data: dict) -> str:
@@ -25,9 +27,8 @@ def get_telegram_sender(update_data: dict) -> str:
 
 
 async def send_telegram_message(chat_id: int, text: str,
-                                 keyboard: InlineKeyboardMarkup | None = None):
-    """Send a message with optional inline keyboard."""
-    await bot.send_message(
+                                 keyboard=None):
+    await get_bot().send_message(
         chat_id=chat_id,
         text=text,
         parse_mode=ParseMode.MARKDOWN_V2,
@@ -37,7 +38,7 @@ async def send_telegram_message(chat_id: int, text: str,
 
 async def process_telegram_update(update_data: dict):
     """Main router for all Telegram updates."""
-    update = Update.de_json(update_data, bot)
+    update = Update.de_json(update_data, get_bot())
 
     # Text message
     if update.message and update.message.text:
@@ -57,11 +58,11 @@ async def process_telegram_update(update_data: dict):
         chat_id = update.message.chat_id
         sender  = get_telegram_sender(update_data)
 
-        await bot.send_message(chat_id=chat_id, text="⏳ Processing your screenshot...")
+        await get_bot().send_message(chat_id=chat_id, text="⏳ Processing your screenshot...")
 
         # Get highest resolution photo
         photo = update.message.photo[-1]
-        tg_file = await bot.get_file(photo.file_id)
+        tg_file = await get_bot().get_file(photo.file_id)
         file_url = tg_file.file_path  # Telegram CDN URL, no auth needed
 
         # Process in background
@@ -84,7 +85,7 @@ async def process_telegram_update(update_data: dict):
 
         state = get_pending_state(sender)
         if not state:
-            await bot.send_message(chat_id=chat_id, text="Session expired\\. Please send the screenshot again\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await get_bot().send_message(chat_id=chat_id, text="Session expired\\. Please send the screenshot again\\.", parse_mode=ParseMode.MARKDOWN_V2)
             return
 
         result = await handle_callback(sender, callback, state)
@@ -106,7 +107,7 @@ def process_upi_screenshot_bg_telegram(sender: str, file_url: str, chat_id: int)
     import asyncio
 
     async def _send(text, keyboard=None):
-        await bot.send_message(
+        await get_bot().send_message(
             chat_id=chat_id,
             text=text,
             parse_mode=ParseMode.MARKDOWN_V2,
