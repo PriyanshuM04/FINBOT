@@ -1,11 +1,7 @@
-"""
-Inline keyboard layouts for Telegram bot.
-"""
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 def yes_no_keyboard() -> InlineKeyboardMarkup:
-    """Yes/No confirmation keyboard."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ Yes, save it", callback_data="confirm_yes"),
@@ -15,7 +11,6 @@ def yes_no_keyboard() -> InlineKeyboardMarkup:
 
 
 def category_keyboard() -> InlineKeyboardMarkup:
-    """Category selection keyboard."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🍔 Food", callback_data="cat_food"),
@@ -32,4 +27,13 @@ def category_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("📦 Other", callback_data="cat_other"),
         ],
+    ])
+
+
+def confirm_clear_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🗑️ Yes, clear everything", callback_data="clear_confirm"),
+            InlineKeyboardButton("❌ Cancel", callback_data="clear_cancel"),
+        ]
     ])
