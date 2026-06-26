@@ -53,7 +53,7 @@ CATEGORY_EMOJIS = {
 
 CORRECTION_PROMPT = (
     "❌ Please type the correct amount and category:\n\n"
-    "Example: `100 food` or `192 travel`\n\n"
+    "Example: 100 food or 192 travel\n\n"
     "Categories: food, travel, shopping, health, bills, entertainment, other"
 )
 
@@ -97,35 +97,29 @@ def save_transaction(sender: str, amount: float, category: str,
 
 
 async def handle_start(sender: str) -> dict:
-    """Returns message and optional keyboard."""
     return {
         "text": (
-            "👋 Welcome to *FinBot*\\!\n\n"
+            "👋 Welcome to *FinBot*!\n\n"
             "• Send *40 chai* or *chai 40* to log an expense\n"
-            "• Forward a *UPI screenshot* to auto\\-log\n"
+            "• Forward a *UPI screenshot* to auto-log\n"
             "• Send /report for your weekly summary\n"
             "• Send /dashboard for your personal dashboard\n\n"
-            "Let's start tracking\\! 💰"
+            "Let's start tracking! 💰"
         ),
         "keyboard": None,
     }
 
 
 async def handle_text(sender: str, body: str) -> dict:
-    """
-    Returns dict with 'text' and optional 'keyboard' for inline buttons.
-    """
     lower = body.lower().strip()
     state = get_pending_state(sender)
 
-    # Pending confirmation state
     if state and state["type"] == "awaiting_confirmation":
         return await _handle_text_during_confirmation(sender, lower, state)
 
     if state and state["type"] == "awaiting_correction":
         return await _handle_correction(sender, body, lower, state)
 
-    # Commands
     if lower in ("/start", "start", "hi", "hello", "help"):
         return await handle_start(sender)
 
@@ -137,9 +131,8 @@ async def handle_text(sender: str, body: str) -> dict:
     if lower == "/dashboard":
         token = hashlib.sha256(sender.encode()).hexdigest()[:16]
         link = f"https://finbot-api-d5le.onrender.com/dashboard/{token}"
-        return {"text": f"📊 [Open your dashboard]({link})", "keyboard": None}
+        return {"text": f"📊 Open your dashboard: {link}", "keyboard": None}
 
-    # Expense logging
     match = EXPENSE_PATTERN.match(body.strip())
     if match:
         if match.group(1):
@@ -162,7 +155,7 @@ async def handle_text(sender: str, body: str) -> dict:
 
     return {
         "text": (
-            "❓ Didn't catch that\\. Try:\n"
+            "❓ Didn't catch that. Try:\n"
             "• *40 chai* to log an expense\n"
             "• /start for all commands"
         ),
@@ -171,12 +164,10 @@ async def handle_text(sender: str, body: str) -> dict:
 
 
 async def _handle_text_during_confirmation(sender: str, lower: str, state: dict) -> dict:
-    """If user types instead of tapping button during confirmation."""
     if lower in ("yes", "y"):
         return await _confirm_yes(sender, state)
     if lower in ("no", "n"):
         return await _confirm_no(sender, state)
-    # Re-show the confirmation with buttons
     emoji = CATEGORY_EMOJIS.get(state["category"], "📦")
     return {
         "text": (
@@ -189,18 +180,13 @@ async def _handle_text_during_confirmation(sender: str, lower: str, state: dict)
 
 
 async def handle_callback(sender: str, callback_data: str, state: dict) -> dict:
-    """Handles inline button taps."""
-
     if callback_data == "confirm_yes":
         return await _confirm_yes(sender, state)
-
     if callback_data == "confirm_no":
         return await _confirm_no(sender, state)
-
     if callback_data.startswith("cat_"):
         category = callback_data.replace("cat_", "")
         return await _save_with_category(sender, category, state)
-
     return {"text": "❓ Unknown action.", "keyboard": None}
 
 
@@ -218,14 +204,13 @@ async def _confirm_yes(sender: str, state: dict) -> dict:
         "text": (
             f"✅ Logged ₹{state['amount']:.0f} for *{state['merchant_name']}*\n"
             f"Category: {state['category'].title()} {emoji}\n\n"
-            f"🧠 I'll remember *{state['merchant_name']}* next time\\!"
+            f"I'll remember *{state['merchant_name']}* next time!"
         ),
         "keyboard": None,
     }
 
 
 async def _confirm_no(sender: str, state: dict) -> dict:
-    """Switch to category selection."""
     correction_state = {
         "type": "awaiting_correction",
         "upi_id": state["upi_id"],
@@ -256,7 +241,7 @@ async def _save_with_category(sender: str, category: str, state: dict) -> dict:
         "text": (
             f"✅ Logged ₹{state['amount']:.0f} for *{state['merchant_name']}*\n"
             f"Category: {category.title()} {emoji}\n\n"
-            f"🧠 I'll remember *{state['merchant_name']}* as {category.title()} next time\\!"
+            f"I'll remember *{state['merchant_name']}* as {category.title()} next time!"
         ),
         "keyboard": None,
     }

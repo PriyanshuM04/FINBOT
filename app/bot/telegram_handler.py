@@ -2,21 +2,18 @@
 Telegram webhook handler.
 Registered at /telegram/webhook in main.py.
 """
-import json
-from fastapi import Request, BackgroundTasks
-from telegram import Update, Bot, InlineKeyboardMarkup
+from telegram import Update, Bot
 from telegram.constants import ParseMode
 from app.config import settings
 from app.bot.conversation import get_pending_state, set_pending_confirmation
 from app.bot.telegram_commands import handle_start, handle_text, handle_callback
 
-# bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+
 def get_bot() -> Bot:
     return Bot(token=settings.TELEGRAM_BOT_TOKEN)
 
 
 def get_telegram_sender(update_data: dict) -> str:
-    """Extract a unique sender ID from Telegram update."""
     if "message" in update_data:
         user_id = update_data["message"]["from"]["id"]
     elif "callback_query" in update_data:
@@ -26,18 +23,16 @@ def get_telegram_sender(update_data: dict) -> str:
     return f"telegram:{user_id}"
 
 
-async def send_telegram_message(chat_id: int, text: str,
-                                 keyboard=None):
+async def send_telegram_message(chat_id: int, text: str, keyboard=None):
     await get_bot().send_message(
         chat_id=chat_id,
         text=text,
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode=ParseMode.MARKDOWN,
         reply_markup=keyboard,
     )
 
 
 async def process_telegram_update(update_data: dict):
-    """Main router for all Telegram updates."""
     update = Update.de_json(update_data, get_bot())
 
     # Text message
@@ -53,20 +48,17 @@ async def process_telegram_update(update_data: dict):
 
         await send_telegram_message(chat_id, result["text"], result.get("keyboard"))
 
-    # Photo message (UPI screenshot)
+    # Photo message
     elif update.message and update.message.photo:
         chat_id = update.message.chat_id
         sender  = get_telegram_sender(update_data)
 
         await get_bot().send_message(chat_id=chat_id, text="⏳ Processing your screenshot...")
 
-        # Get highest resolution photo
         photo = update.message.photo[-1]
         tg_file = await get_bot().get_file(photo.file_id)
-        file_url = tg_file.file_path  # Telegram CDN URL, no auth needed
+        file_url = tg_file.file_path
 
-        # Process in background
-        from app.tasks.image_tasks import process_upi_screenshot_bg
         import asyncio
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
@@ -76,16 +68,19 @@ async def process_telegram_update(update_data: dict):
 
     # Inline button tap
     elif update.callback_query:
-        query       = update.callback_query
-        chat_id     = query.message.chat_id
-        sender      = get_telegram_sender(update_data)
-        callback    = query.data
+        query    = update.callback_query
+        chat_id  = query.message.chat_id
+        sender   = get_telegram_sender(update_data)
+        callback = query.data
 
-        await query.answer()  # dismiss the loading spinner on button
+        await query.answer()
 
         state = get_pending_state(sender)
         if not state:
-            await get_bot().send_message(chat_id=chat_id, text="Session expired\\. Please send the screenshot again\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await get_bot().send_message(
+                chat_id=chat_id,
+                text="Session expired. Please send the screenshot again."
+            )
             return
 
         result = await handle_callback(sender, callback, state)
@@ -93,36 +88,29 @@ async def process_telegram_update(update_data: dict):
 
 
 def process_upi_screenshot_bg_telegram(sender: str, file_url: str, chat_id: int):
-    """
-    Wrapper around image_tasks that sends result to Telegram instead of WhatsApp.
-    """
     import httpx
-    from app.ocr.extractor_ocrspace import extract_text_from_url
+    import base64
+    import asyncio
     from app.parsers.upi.router import parse_upi_screenshot
     from app.cache.merchant_cache import get_merchant
     from app.cache.promoter import get_permanent_merchant
     from app.bot.telegram_commands import suggest_category_from_text, CATEGORY_EMOJIS
     from app.bot.telegram_keyboards import yes_no_keyboard
-    from app.bot.conversation import set_pending_confirmation
-    import asyncio
 
     async def _send(text, keyboard=None):
         await get_bot().send_message(
             chat_id=chat_id,
             text=text,
-            parse_mode=ParseMode.MARKDOWN_V2,
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=keyboard,
         )
 
     async def _run():
         try:
-            # Download from Telegram CDN (no auth needed)
             response = httpx.get(file_url, timeout=30.0)
             response.raise_for_status()
             image_bytes = response.content
 
-            # OCR via OCR.space
-            import base64
             b64 = base64.b64encode(image_bytes).decode("utf-8")
             base64_image = f"data:image/jpeg;base64,{b64}"
 
@@ -148,17 +136,17 @@ def process_upi_screenshot_bg_telegram(sender: str, file_url: str, chat_id: int)
                 texts.extend([l.strip() for l in raw.split("\n") if l.strip()])
 
             if not texts:
-                await _send("🔍 Couldn't read text from this image\\. Try a clearer screenshot\\.")
+                await _send("🔍 Couldn't read text from this image. Try a clearer screenshot.")
                 return
 
             result = parse_upi_screenshot(texts)
 
             if result is None:
-                await _send("🤔 Couldn't recognise this as a UPI screenshot\\.\nOr type manually: *150 groceries*")
+                await _send("🤔 Couldn't recognise this as a UPI screenshot.\nOr type manually: *150 groceries*")
                 return
 
             if result.amount == 0:
-                await _send(f"📸 Detected *{result.app_source.upper()}* but couldn't read amount\\.\nType manually: *150 expense*")
+                await _send(f"📸 Detected *{result.app_source.upper()}* but couldn't read amount.\nType manually: *150 expense*")
                 return
 
             upi_id    = result.upi_id or result.merchant_name or result.app_source
@@ -183,7 +171,7 @@ def process_upi_screenshot_bg_telegram(sender: str, file_url: str, chat_id: int)
                 app_source=result.app_source,
             )
 
-            known_tag = " _\\(remembered\\)_" if known else ""
+            known_tag = " _(remembered)_" if known else ""
             await _send(
                 f"{txn_emoji} *₹{result.amount:.0f}* {direction} *{merchant}*\n"
                 f"App: {result.app_source.upper()}\n"
@@ -193,7 +181,7 @@ def process_upi_screenshot_bg_telegram(sender: str, file_url: str, chat_id: int)
             )
 
         except Exception as e:
-            await _send("⚠️ Something went wrong\\. Try again or type manually: *150 groceries*")
+            await _send("⚠️ Something went wrong. Try again or type manually: *150 groceries*")
             print(f"Telegram OCR error: {e}")
 
     asyncio.run(_run())
