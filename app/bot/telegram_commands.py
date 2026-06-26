@@ -13,6 +13,7 @@ from app.cache.redis_client import get_redis
 from app.bot.conversation import get_pending_state, clear_pending_state
 from app.bot.telegram_keyboards import yes_no_keyboard, category_keyboard
 from app.config import settings
+from app.bot.telegram_keyboards import yes_no_keyboard, category_keyboard, confirm_clear_keyboard
 
 EXPENSE_PATTERN = re.compile(
     r"^₹?(\d+(?:\.\d{1,2})?)\s+(.+)$|^(.+?)\s+₹?(\d+(?:\.\d{1,2})?)$",
@@ -132,6 +133,15 @@ async def handle_text(sender: str, body: str) -> dict:
         token = hashlib.sha256(sender.encode()).hexdigest()[:16]
         link = f"https://finbot-api-d5le.onrender.com/dashboard/{token}"
         return {"text": f"📊 Open your dashboard: {link}", "keyboard": None}
+    
+    if lower == "/clear":
+        return {
+            "text": (
+                "⚠️ *This will permanently delete ALL your transactions.*\n\n"
+                "Are you sure you want to reset your data?"
+            ),
+            "keyboard": confirm_clear_keyboard(),
+        }
 
     match = EXPENSE_PATTERN.match(body.strip())
     if match:
@@ -187,6 +197,10 @@ async def handle_callback(sender: str, callback_data: str, state: dict) -> dict:
     if callback_data.startswith("cat_"):
         category = callback_data.replace("cat_", "")
         return await _save_with_category(sender, category, state)
+    if callback_data == "clear_confirm":
+        return await _clear_user_data(sender)
+    if callback_data == "clear_cancel":
+        return {"text": "✅ Cancelled. Your data is safe.", "keyboard": None}
     return {"text": "❓ Unknown action.", "keyboard": None}
 
 
