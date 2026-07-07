@@ -1,6 +1,5 @@
 """
-Telegram command handlers — same logic as WhatsApp commands
-but uses Telegram's native inline keyboards.
+Telegram command handlers with text expense category learning.
 """
 import re
 import json
@@ -11,9 +10,8 @@ from app.cache.merchant_cache import set_merchant, record_appearance
 from app.cache.promoter import check_and_promote
 from app.cache.redis_client import get_redis
 from app.bot.conversation import get_pending_state, clear_pending_state
-from app.bot.telegram_keyboards import yes_no_keyboard, category_keyboard
-from app.config import settings
 from app.bot.telegram_keyboards import yes_no_keyboard, category_keyboard, confirm_clear_keyboard
+from app.config import settings
 
 EXPENSE_PATTERN = re.compile(
     r"^₹?(\d+(?:\.\d{1,2})?)\s+(.+)$|^(.+?)\s+₹?(\d+(?:\.\d{1,2})?)$",
@@ -59,6 +57,24 @@ CORRECTION_PROMPT = (
     "Example: 100 food or 192 travel\n\n"
     "Categories: food, travel, shopping, health, bills, entertainment, other"
 )
+
+# Redis TTL for learned keywords (30 days)
+KEYWORD_CACHE_TTL = 30 * 24 * 60 * 60
+
+
+def get_learned_category(sender: str, keyword: str) -> str | None:
+    """Check if user has previously categorised this keyword."""
+    r = get_redis()
+    key = f"keyword:{sender}:{keyword.lower().strip()}"
+    val = r.get(key)
+    return val.decode() if val else None
+
+
+def save_learned_keyword(sender: str, keyword: str, category: str):
+    """Cache keyword → category mapping for this user."""
+    r = get_redis()
+    key = f"keyword:{sender}:{keyword.lower().strip()}"
+    r.setex(key, KEYWORD_CACHE_TTL, category)
 
 
 def suggest_category_from_text(text: str) -> str:
@@ -106,7 +122,8 @@ async def handle_start(sender: str) -> dict:
             "• Send *40 chai* or *chai 40* to log an expense\n"
             "• Forward a *UPI screenshot* to auto-log\n"
             "• Send /report for your weekly summary\n"
-            "• Send /dashboard for your personal dashboard\n\n"
+            "• Send /dashboard for your personal dashboard\n"
+            "• Send /clear to reset your data\n\n"
             "Let's start tracking! 💰"
         ),
         "keyboard": None,
@@ -123,6 +140,10 @@ async def handle_text(sender: str, body: str) -> dict:
     if state and state["type"] == "awaiting_correction":
         return await _handle_correction(sender, body, lower, state)
 
+    if state and state["type"] == "awaiting_text_category":
+        # User typed instead of tapping button
+        return await _handle_text_category_typed(sender, lower, state)
+
     if lower in ("/start", "start", "hi", "hello", "help"):
         return await handle_start(sender)
 
@@ -135,7 +156,7 @@ async def handle_text(sender: str, body: str) -> dict:
         token = hashlib.sha256(sender.encode()).hexdigest()[:16]
         link = f"https://finbot-api-d5le.onrender.com/dashboard/{token}"
         return {"text": f"📊 Open your dashboard: {link}", "keyboard": None}
-    
+
     if lower == "/clear":
         return {
             "text": (
@@ -145,6 +166,7 @@ async def handle_text(sender: str, body: str) -> dict:
             "keyboard": confirm_clear_keyboard(),
         }
 
+    # Expense logging
     match = EXPENSE_PATTERN.match(body.strip())
     if match:
         if match.group(1):
@@ -157,12 +179,44 @@ async def handle_text(sender: str, body: str) -> dict:
         if not description:
             description = "expense"
 
+        # Check learned keywords first
+        learned = get_learned_category(sender, description)
+        if learned:
+            emoji = CATEGORY_EMOJIS.get(learned, "📦")
+            save_transaction(sender, amount, learned, description, "text", body)
+            return {
+                "text": f"✅ Logged ₹{amount:.0f} for *{description}* · {learned.title()} {emoji}",
+                "keyboard": None,
+            }
+
+        # Try keyword matching
         category = suggest_category_from_text(description)
-        emoji = CATEGORY_EMOJIS.get(category, "📦")
-        save_transaction(sender, amount, category, description, "text", body)
+
+        if category != "other":
+            # Confident match — log directly
+            emoji = CATEGORY_EMOJIS.get(category, "📦")
+            save_transaction(sender, amount, category, description, "text", body)
+            return {
+                "text": f"✅ Logged ₹{amount:.0f} for *{description}* · {category.title()} {emoji}",
+                "keyboard": None,
+            }
+
+        # No match — ask user to pick category
+        r = get_redis()
+        pending = {
+            "type": "awaiting_text_category",
+            "amount": amount,
+            "description": description,
+            "raw": body,
+        }
+        r.setex(f"pending:{sender}", 300, json.dumps(pending))
+
         return {
-            "text": f"✅ Logged ₹{amount:.0f} for *{description}* · {category.title()} {emoji}",
-            "keyboard": None,
+            "text": (
+                f"₹{amount:.0f} for *{description}*\n\n"
+                f"Which category should this go to?"
+            ),
+            "keyboard": category_keyboard(),
         }
 
     return {
@@ -170,6 +224,55 @@ async def handle_text(sender: str, body: str) -> dict:
             "❓ Didn't catch that. Try:\n"
             "• *40 chai* to log an expense\n"
             "• /start for all commands"
+        ),
+        "keyboard": None,
+    }
+
+
+async def _handle_text_category_typed(sender: str, lower: str, state: dict) -> dict:
+    """User typed a category name instead of tapping a button."""
+    valid = ["food", "travel", "shopping", "health", "bills", "entertainment", "other"]
+    if lower in valid:
+        return await _save_text_with_category(sender, lower, state)
+    return {
+        "text": "Please tap one of the category buttons above.",
+        "keyboard": category_keyboard(),
+    }
+
+
+async def handle_callback(sender: str, callback_data: str, state: dict) -> dict:
+    if callback_data == "confirm_yes":
+        return await _confirm_yes(sender, state)
+    if callback_data == "confirm_no":
+        return await _confirm_no(sender, state)
+    if callback_data.startswith("cat_"):
+        category = callback_data.replace("cat_", "")
+        # Check if this is for a text expense or a screenshot
+        if state and state.get("type") == "awaiting_text_category":
+            return await _save_text_with_category(sender, category, state)
+        return await _save_with_category(sender, category, state)
+    if callback_data == "clear_confirm":
+        return await _clear_user_data(sender)
+    if callback_data == "clear_cancel":
+        return {"text": "✅ Cancelled. Your data is safe.", "keyboard": None}
+    return {"text": "❓ Unknown action.", "keyboard": None}
+
+
+async def _save_text_with_category(sender: str, category: str, state: dict) -> dict:
+    """Save a text expense with user-selected category and learn the keyword."""
+    clear_pending_state(sender)
+    amount      = state["amount"]
+    description = state["description"]
+
+    # Learn this keyword for future
+    save_learned_keyword(sender, description, category)
+
+    save_transaction(sender, amount, category, description, "text", state["raw"])
+    emoji = CATEGORY_EMOJIS.get(category, "📦")
+    return {
+        "text": (
+            f"✅ Logged ₹{amount:.0f} for *{description}* · {category.title()} {emoji}\n\n"
+            f"Got it! I'll remember *{description}* as {category.title()} next time."
         ),
         "keyboard": None,
     }
@@ -189,21 +292,6 @@ async def _handle_text_during_confirmation(sender: str, lower: str, state: dict)
         ),
         "keyboard": yes_no_keyboard(),
     }
-
-
-async def handle_callback(sender: str, callback_data: str, state: dict) -> dict:
-    if callback_data == "confirm_yes":
-        return await _confirm_yes(sender, state)
-    if callback_data == "confirm_no":
-        return await _confirm_no(sender, state)
-    if callback_data.startswith("cat_"):
-        category = callback_data.replace("cat_", "")
-        return await _save_with_category(sender, category, state)
-    if callback_data == "clear_confirm":
-        return await _clear_user_data(sender)
-    if callback_data == "clear_cancel":
-        return {"text": "✅ Cancelled. Your data is safe.", "keyboard": None}
-    return {"text": "❓ Unknown action.", "keyboard": None}
 
 
 async def _confirm_yes(sender: str, state: dict) -> dict:
@@ -288,6 +376,7 @@ async def _handle_correction(sender: str, body: str, lower: str, state: dict) ->
         "keyboard": None,
     }
 
+
 async def _clear_user_data(sender: str) -> dict:
     db = SessionLocal()
     try:
@@ -295,11 +384,12 @@ async def _clear_user_data(sender: str) -> dict:
         if user:
             db.query(Transaction).filter(Transaction.user_id == user.id).delete()
             db.commit()
-        # Also clear Redis cache for this user
         r = get_redis()
         for key in r.scan_iter(f"merchant:{sender}:*"):
             r.delete(key)
         for key in r.scan_iter(f"perm_merchant:{sender}:*"):
+            r.delete(key)
+        for key in r.scan_iter(f"keyword:{sender}:*"):
             r.delete(key)
         clear_pending_state(sender)
     finally:
