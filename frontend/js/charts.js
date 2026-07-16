@@ -44,7 +44,7 @@ function renderBarChart(monthlyTrend) {
       color: barAmounts.map((_,i) => i === 2 ? '#7c5cfc' : '#2a2a38'),
       line: { width: 0 },
     },
-    hovertemplate: '<b>%{x}</b><br>₹%{y}<extra></extra>',
+    hovertemplate: '<b>%{x}</b><br>%{y}<extra></extra>',
   }], {
     paper_bgcolor: 'transparent',
     plot_bgcolor: 'transparent',
