@@ -76,8 +76,11 @@ async def process_telegram_update(update_data: dict):
         await query.answer()
 
         state = get_pending_state(sender)
-
-        if not state and callback not in ("clear_confirm", "clear_cancel"):
+        skip_state_check = (
+            callback in ("clear_confirm", "clear_cancel") or
+            callback.startswith("del_")
+        )
+        if not state and not skip_state_check:
             await get_bot().send_message(
                 chat_id=chat_id,
                 text="Session expired. Please send the screenshot again."
