@@ -66,7 +66,7 @@ LAST_TXN_TTL     = 24 * 60 * 60  # store last txn ID for 24 hours
 def get_learned_category(sender: str, keyword: str) -> str | None:
     r = get_redis()
     val = r.get(f"keyword:{sender}:{keyword.lower().strip()}")
-    return val.decode() if val else None
+    return val.decode() if isinstance(val, bytes) else val if val else None
 
 
 def save_learned_keyword(sender: str, keyword: str, category: str):
@@ -82,7 +82,9 @@ def save_last_txn_id(sender: str, txn_id: int):
 def get_last_txn_id(sender: str) -> int | None:
     r = get_redis()
     val = r.get(f"last_txn:{sender}")
-    return int(val.decode()) if val else None
+    if not val:
+        return None
+    return int(val) if isinstance(val, int) else int(val.decode() if isinstance(val, bytes) else val)
 
 
 def suggest_category_from_text(text: str) -> str:
