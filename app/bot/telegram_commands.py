@@ -1,5 +1,5 @@
 """
-Telegram command handlers with text expense category learning.
+Telegram command handlers with undo, history, and category learning.
 """
 import re
 import json
@@ -10,7 +10,10 @@ from app.cache.merchant_cache import set_merchant, record_appearance
 from app.cache.promoter import check_and_promote
 from app.cache.redis_client import get_redis
 from app.bot.conversation import get_pending_state, clear_pending_state
-from app.bot.telegram_keyboards import yes_no_keyboard, category_keyboard, confirm_clear_keyboard
+from app.bot.telegram_keyboards import (
+    yes_no_keyboard, category_keyboard,
+    confirm_clear_keyboard, history_keyboard
+)
 from app.config import settings
 
 EXPENSE_PATTERN = re.compile(
@@ -27,18 +30,16 @@ CATEGORY_KEYWORDS = {
     "food":          ["swiggy", "zomato", "domino", "pizza", "food", "cafe",
                       "restaurant", "chai", "biryani", "hotel", "dhaba",
                       "bakery", "juice", "snack", "eat", "lunch", "dinner",
-                      "breakfast", "pav", "bhaji", "maggi", "tea", "coffee", 
-                      "lassi", "frooti", "samosa", "nashta", "snacks", 
-                      "chocolate", "colddrink", "drinks"],
+                      "breakfast", "pav", "bhaji", "maggi", "tea", "coffee"],
     "travel":        ["irctc", "uber", "ola", "rapido", "redbus", "petrol",
                       "fuel", "cab", "auto", "parking", "railway", "bus",
                       "metro", "flight", "train", "toll"],
     "shopping":      ["amazon", "flipkart", "myntra", "ajio", "meesho",
                       "mall", "store", "mart", "shop", "bazar", "market",
-                      "cloth", "dress", "shoes", "bag", "bazaar", "clothes"],
+                      "cloth", "dress", "shoes", "bag"],
     "health":        ["pharmacy", "medical", "chemist", "hospital", "clinic",
                       "doctor", "lab", "apollo", "medplus", "netmeds",
-                      "1mg", "medicine", "pharma", "health", "gym", "meds"],
+                      "1mg", "medicine", "pharma", "health", "gym"],
     "bills":         ["electricity", "jio", "airtel", "bsnl", "recharge",
                       "netflix", "spotify", "prime", "hotstar", "disney",
                       "water", "gas", "rent", "broadband", "wifi", "bill",
@@ -58,23 +59,30 @@ CORRECTION_PROMPT = (
     "Categories: food, travel, shopping, health, bills, entertainment, other"
 )
 
-# Redis TTL for learned keywords (30 days)
 KEYWORD_CACHE_TTL = 30 * 24 * 60 * 60
+LAST_TXN_TTL     = 24 * 60 * 60  # store last txn ID for 24 hours
 
 
 def get_learned_category(sender: str, keyword: str) -> str | None:
-    """Check if user has previously categorised this keyword."""
     r = get_redis()
-    key = f"keyword:{sender}:{keyword.lower().strip()}"
-    val = r.get(key)
+    val = r.get(f"keyword:{sender}:{keyword.lower().strip()}")
     return val.decode() if val else None
 
 
 def save_learned_keyword(sender: str, keyword: str, category: str):
-    """Cache keyword → category mapping for this user."""
     r = get_redis()
-    key = f"keyword:{sender}:{keyword.lower().strip()}"
-    r.setex(key, KEYWORD_CACHE_TTL, category)
+    r.setex(f"keyword:{sender}:{keyword.lower().strip()}", KEYWORD_CACHE_TTL, category)
+
+
+def save_last_txn_id(sender: str, txn_id: int):
+    r = get_redis()
+    r.setex(f"last_txn:{sender}", LAST_TXN_TTL, str(txn_id))
+
+
+def get_last_txn_id(sender: str) -> int | None:
+    r = get_redis()
+    val = r.get(f"last_txn:{sender}")
+    return int(val.decode()) if val else None
 
 
 def suggest_category_from_text(text: str) -> str:
@@ -97,7 +105,8 @@ def get_or_create_user(db, phone_number: str):
 
 
 def save_transaction(sender: str, amount: float, category: str,
-                     description: str, source: str, raw_input: str):
+                     description: str, source: str, raw_input: str) -> int:
+    """Save transaction and return its ID."""
     db = SessionLocal()
     try:
         user = get_or_create_user(db, sender)
@@ -111,8 +120,11 @@ def save_transaction(sender: str, amount: float, category: str,
         )
         db.add(transaction)
         db.commit()
+        db.refresh(transaction)
+        txn_id = transaction.id
     finally:
         db.close()
+    return txn_id
 
 
 async def handle_start(sender: str) -> dict:
@@ -123,7 +135,9 @@ async def handle_start(sender: str) -> dict:
             "• Forward a *UPI screenshot* to auto-log\n"
             "• Send /report for your weekly summary\n"
             "• Send /dashboard for your personal dashboard\n"
-            "• Send /clear to reset your data\n\n"
+            "• Send /undo to remove your last entry\n"
+            "• Send /history to view and delete recent entries\n"
+            "• Send /clear to reset all your data\n\n"
             "Let's start tracking! 💰"
         ),
         "keyboard": None,
@@ -141,7 +155,6 @@ async def handle_text(sender: str, body: str) -> dict:
         return await _handle_correction(sender, body, lower, state)
 
     if state and state["type"] == "awaiting_text_category":
-        # User typed instead of tapping button
         return await _handle_text_category_typed(sender, lower, state)
 
     if lower in ("/start", "start", "hi", "hello", "help"):
@@ -154,8 +167,14 @@ async def handle_text(sender: str, body: str) -> dict:
 
     if lower == "/dashboard":
         token = hashlib.sha256(sender.encode()).hexdigest()[:16]
-        link = f"https://finbot-api-d5le.onrender.com/dashboard/{token}"
+        link  = f"https://finbot-api-d5le.onrender.com/dashboard/{token}"
         return {"text": f"📊 Open your dashboard: {link}", "keyboard": None}
+
+    if lower == "/undo":
+        return await _handle_undo(sender)
+
+    if lower == "/history":
+        return await _handle_history(sender)
 
     if lower == "/clear":
         return {
@@ -170,10 +189,10 @@ async def handle_text(sender: str, body: str) -> dict:
     match = EXPENSE_PATTERN.match(body.strip())
     if match:
         if match.group(1):
-            amount = float(match.group(1))
+            amount      = float(match.group(1))
             description = match.group(2).strip()
         else:
-            amount = float(match.group(4))
+            amount      = float(match.group(4))
             description = match.group(3).strip()
 
         if not description:
@@ -182,26 +201,26 @@ async def handle_text(sender: str, body: str) -> dict:
         # Check learned keywords first
         learned = get_learned_category(sender, description)
         if learned:
-            emoji = CATEGORY_EMOJIS.get(learned, "📦")
-            save_transaction(sender, amount, learned, description, "text", body)
+            emoji  = CATEGORY_EMOJIS.get(learned, "📦")
+            txn_id = save_transaction(sender, amount, learned, description, "text", body)
+            save_last_txn_id(sender, txn_id)
             return {
-                "text": f"✅ Logged ₹{amount:.0f} for *{description}* · {learned.title()} {emoji}",
+                "text": f"✅ Logged ₹{amount:.0f} for *{description}* · {learned.title()} {emoji}\n_/undo to remove_",
                 "keyboard": None,
             }
 
-        # Try keyword matching
         category = suggest_category_from_text(description)
 
         if category != "other":
-            # Confident match — log directly
-            emoji = CATEGORY_EMOJIS.get(category, "📦")
-            save_transaction(sender, amount, category, description, "text", body)
+            emoji  = CATEGORY_EMOJIS.get(category, "📦")
+            txn_id = save_transaction(sender, amount, category, description, "text", body)
+            save_last_txn_id(sender, txn_id)
             return {
-                "text": f"✅ Logged ₹{amount:.0f} for *{description}* · {category.title()} {emoji}",
+                "text": f"✅ Logged ₹{amount:.0f} for *{description}* · {category.title()} {emoji}\n_/undo to remove_",
                 "keyboard": None,
             }
 
-        # No match — ask user to pick category
+        # No match — ask category
         r = get_redis()
         pending = {
             "type": "awaiting_text_category",
@@ -210,12 +229,8 @@ async def handle_text(sender: str, body: str) -> dict:
             "raw": body,
         }
         r.setex(f"pending:{sender}", 300, json.dumps(pending))
-
         return {
-            "text": (
-                f"₹{amount:.0f} for *{description}*\n\n"
-                f"Which category should this go to?"
-            ),
+            "text": f"₹{amount:.0f} for *{description}*\n\nWhich category?",
             "keyboard": category_keyboard(),
         }
 
@@ -229,8 +244,75 @@ async def handle_text(sender: str, body: str) -> dict:
     }
 
 
+async def _handle_undo(sender: str) -> dict:
+    txn_id = get_last_txn_id(sender)
+    if not txn_id:
+        return {"text": "Nothing to undo — no recent transaction found.", "keyboard": None}
+
+    db = SessionLocal()
+    try:
+        txn = db.query(Transaction).filter(Transaction.id == txn_id).first()
+        if not txn:
+            return {"text": "That transaction no longer exists.", "keyboard": None}
+
+        desc   = txn.description
+        amount = txn.amount
+        db.delete(txn)
+        db.commit()
+
+        # Clear from Redis
+        r = get_redis()
+        r.delete(f"last_txn:{sender}")
+    finally:
+        db.close()
+
+    return {
+        "text": f"🗑️ Removed last entry: ₹{amount:.0f} {desc}",
+        "keyboard": None,
+    }
+
+
+async def _handle_history(sender: str) -> dict:
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.phone_number == sender).first()
+        if not user:
+            return {"text": "No transactions found.", "keyboard": None}
+
+        txns = (
+            db.query(Transaction)
+            .filter(Transaction.user_id == user.id)
+            .order_by(Transaction.created_at.desc())
+            .limit(5)
+            .all()
+        )
+
+        if not txns:
+            return {"text": "No transactions found.", "keyboard": None}
+
+        lines = ["*Your last 5 transactions:*\n"]
+        txn_list = []
+        for i, t in enumerate(txns, 1):
+            emoji = CATEGORY_EMOJIS.get(t.category.value, "📦")
+            date  = t.created_at.strftime("%d %b") if t.created_at else ""
+            lines.append(f"{i}. ₹{t.amount:.0f} {t.description} · {emoji} _{date}_")
+            txn_list.append({
+                "index": i,
+                "id": t.id,
+                "amount": t.amount,
+                "description": t.description,
+            })
+
+        lines.append("\n_Tap to delete an entry:_")
+        return {
+            "text": "\n".join(lines),
+            "keyboard": history_keyboard(txn_list),
+        }
+    finally:
+        db.close()
+
+
 async def _handle_text_category_typed(sender: str, lower: str, state: dict) -> dict:
-    """User typed a category name instead of tapping a button."""
     valid = ["food", "travel", "shopping", "health", "bills", "entertainment", "other"]
     if lower in valid:
         return await _save_text_with_category(sender, lower, state)
@@ -247,10 +329,12 @@ async def handle_callback(sender: str, callback_data: str, state: dict) -> dict:
         return await _confirm_no(sender, state)
     if callback_data.startswith("cat_"):
         category = callback_data.replace("cat_", "")
-        # Check if this is for a text expense or a screenshot
         if state and state.get("type") == "awaiting_text_category":
             return await _save_text_with_category(sender, category, state)
         return await _save_with_category(sender, category, state)
+    if callback_data.startswith("del_"):
+        txn_id = int(callback_data.replace("del_", ""))
+        return await _delete_transaction(sender, txn_id)
     if callback_data == "clear_confirm":
         return await _clear_user_data(sender)
     if callback_data == "clear_cancel":
@@ -258,21 +342,36 @@ async def handle_callback(sender: str, callback_data: str, state: dict) -> dict:
     return {"text": "❓ Unknown action.", "keyboard": None}
 
 
+async def _delete_transaction(sender: str, txn_id: int) -> dict:
+    db = SessionLocal()
+    try:
+        txn = db.query(Transaction).filter(Transaction.id == txn_id).first()
+        if not txn:
+            return {"text": "Transaction not found.", "keyboard": None}
+        desc   = txn.description
+        amount = txn.amount
+        db.delete(txn)
+        db.commit()
+    finally:
+        db.close()
+    return {
+        "text": f"🗑️ Deleted: ₹{amount:.0f} {desc}",
+        "keyboard": None,
+    }
+
+
 async def _save_text_with_category(sender: str, category: str, state: dict) -> dict:
-    """Save a text expense with user-selected category and learn the keyword."""
     clear_pending_state(sender)
     amount      = state["amount"]
     description = state["description"]
-
-    # Learn this keyword for future
     save_learned_keyword(sender, description, category)
-
-    save_transaction(sender, amount, category, description, "text", state["raw"])
+    txn_id = save_transaction(sender, amount, category, description, "text", state["raw"])
+    save_last_txn_id(sender, txn_id)
     emoji = CATEGORY_EMOJIS.get(category, "📦")
     return {
         "text": (
             f"✅ Logged ₹{amount:.0f} for *{description}* · {category.title()} {emoji}\n\n"
-            f"Got it! I'll remember *{description}* as {category.title()} next time."
+            f"Got it! I'll remember *{description}* as {category.title()} next time.\n_/undo to remove_"
         ),
         "keyboard": None,
     }
@@ -299,16 +398,17 @@ async def _confirm_yes(sender: str, state: dict) -> dict:
     set_merchant(sender, state["upi_id"], state["category"])
     record_appearance(sender, state["upi_id"])
     check_and_promote(sender, state["upi_id"], state["category"])
-    save_transaction(
+    txn_id = save_transaction(
         sender, state["amount"], state["category"],
         state["merchant_name"], f"upi_{state['app_source']}", state["upi_id"],
     )
+    save_last_txn_id(sender, txn_id)
     emoji = CATEGORY_EMOJIS.get(state["category"], "📦")
     return {
         "text": (
             f"✅ Logged ₹{state['amount']:.0f} for *{state['merchant_name']}*\n"
             f"Category: {state['category'].title()} {emoji}\n\n"
-            f"I'll remember *{state['merchant_name']}* next time!"
+            f"I'll remember *{state['merchant_name']}* next time!\n_/undo to remove_"
         ),
         "keyboard": None,
     }
@@ -336,16 +436,17 @@ async def _save_with_category(sender: str, category: str, state: dict) -> dict:
     set_merchant(sender, state["upi_id"], category)
     record_appearance(sender, state["upi_id"])
     check_and_promote(sender, state["upi_id"], category)
-    save_transaction(
+    txn_id = save_transaction(
         sender, state["amount"], category,
         state["merchant_name"], f"upi_{state['app_source']}", state["upi_id"],
     )
+    save_last_txn_id(sender, txn_id)
     emoji = CATEGORY_EMOJIS.get(category, "📦")
     return {
         "text": (
             f"✅ Logged ₹{state['amount']:.0f} for *{state['merchant_name']}*\n"
             f"Category: {category.title()} {emoji}\n\n"
-            f"I'll remember *{state['merchant_name']}* as {category.title()} next time!"
+            f"I'll remember *{state['merchant_name']}* as {category.title()} next time!\n_/undo to remove_"
         ),
         "keyboard": None,
     }
@@ -359,19 +460,19 @@ async def _handle_correction(sender: str, body: str, lower: str, state: dict) ->
     amount   = float(match.group(1))
     category = match.group(2).lower()
     clear_pending_state(sender)
-
     set_merchant(sender, state["upi_id"], category)
     record_appearance(sender, state["upi_id"])
     check_and_promote(sender, state["upi_id"], category)
-    save_transaction(
+    txn_id = save_transaction(
         sender, amount, category,
         state["merchant_name"], f"upi_{state['app_source']}", state["upi_id"],
     )
+    save_last_txn_id(sender, txn_id)
     emoji = CATEGORY_EMOJIS.get(category, "📦")
     return {
         "text": (
             f"✅ Logged ₹{amount:.0f} for *{state['merchant_name']}*\n"
-            f"Category: {category.title()} {emoji}"
+            f"Category: {category.title()} {emoji}\n_/undo to remove_"
         ),
         "keyboard": None,
     }
@@ -391,6 +492,7 @@ async def _clear_user_data(sender: str) -> dict:
             r.delete(key)
         for key in r.scan_iter(f"keyword:{sender}:*"):
             r.delete(key)
+        r.delete(f"last_txn:{sender}")
         clear_pending_state(sender)
     finally:
         db.close()

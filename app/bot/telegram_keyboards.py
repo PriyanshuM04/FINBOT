@@ -37,3 +37,12 @@ def confirm_clear_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("❌ Cancel", callback_data="clear_cancel"),
         ]
     ])
+
+
+def history_keyboard(transactions: list) -> InlineKeyboardMarkup:
+    """Inline delete buttons for each transaction in history."""
+    buttons = []
+    for txn in transactions:
+        label = f"🗑️ #{txn['index']} ₹{txn['amount']:.0f} {txn['description']}"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"del_{txn['id']}")])
+    return InlineKeyboardMarkup(buttons)
