@@ -1,37 +1,106 @@
-# 💰 FinBot — Personal Finance Intelligence via WhatsApp
+<div align="center">
 
-A personal finance tracker that lives entirely inside WhatsApp.  
-No new app to install. No new habit to build.  
-Tracks UPI payments, bill photos, and cash expenses — built specifically for how Indians actually spend money.
+# 💰 FinBot
 
----
+### Personal Finance Intelligence via Telegram & WhatsApp
 
-## How It Works
+Track UPI payments, log cash expenses, and visualise your spending — all without leaving your chat app.
 
-Send a WhatsApp message → FinBot parses it → logs it → learns your habits over time.
+[![Live Bot](https://img.shields.io/badge/Telegram-@HeyFinBot-2CA5E0?style=for-the-badge&logo=telegram)](https://t.me/HeyFinBot)
+[![GitHub](https://img.shields.io/badge/GitHub-PriyanshuM04-181717?style=for-the-badge&logo=github)](https://github.com/PriyanshuM04/FINBOT)
+[![Deployed on Render](https://img.shields.io/badge/Deployed%20on-Render-46E3B7?style=for-the-badge&logo=render)](https://finbot-api-d5le.onrender.com)
 
-| You send | FinBot does |
-|---|---|
-| Forward a GPay/PhonePe screenshot | Extracts merchant, amount, date — logs automatically |
-| Photo of a bill or receipt | OCR extracts every line item |
-| PDF bank statement | Bulk imports all transactions |
-| `"40 pav bhaji"` | Logs ₹40 under Food instantly |
-| `"report"` | Sends you a dashboard link |
+</div>
 
 ---
 
-## Core Feature — Smart Merchant Caching
+## What is FinBot?
 
-The bot remembers merchants the way humans do — frequent places get remembered forever, one-time visits are forgotten.
+FinBot is a personal finance tracker that lives entirely inside Telegram and WhatsApp. No new app to install, no new habit to build. Forward a UPI screenshot and it auto-logs the transaction. Type `20 chai` and it's logged instantly.
 
-| Appearances | Memory Duration |
+Built specifically for the Indian UPI ecosystem — GPay, PhonePe, Paytm, and Amazon Pay.
+
+---
+
+## Features
+
+- **UPI Screenshot Parsing** — Forward any GPay, PhonePe, Paytm, or Amazon Pay screenshot and FinBot reads the amount, merchant, and app automatically
+- **Smart Merchant Memory** — Redis TTL caching with frequency-based promotion. Bot asks category once, remembers forever for frequent merchants
+- **Text Expense Logging** — Type `20 chai` or `chai 20` — both work. Bot auto-detects category from keywords
+- **Category Learning** — When a keyword doesn't match, bot shows a category picker. Next time the same keyword appears, it's auto-categorised
+- **Inline Keyboards** — Tap yes/no and category buttons instead of typing — full native Telegram button support
+- **Weekly Summary** — Spending breakdown by category, top merchant, total transactions
+- **Web Dashboard** — Interactive Plotly charts with category breakdown, monthly trend, top merchants, recent transactions
+- **Undo & History** — Remove the last logged entry with `/undo` or view and delete specific entries via `/history`
+
+---
+
+## How to Use
+
+### Getting Started on Telegram
+
+1. Open Telegram and search **@HeyFinBot**
+2. Tap **Start** or send `/start`
+3. That's it — no signup, no join code, no session expiry
+
+### Getting Started on WhatsApp
+
+1. Save **+1 415 523 8886** on WhatsApp
+2. Send: `join parent-receive`
+3. Wait for the confirmation message
+4. Send `hello` to get started
+
+> ⏱️ First message may take ~50 seconds if the bot has been idle — it wakes up automatically on Render's free tier.
+
+---
+
+### Logging Expenses
+
+**Forward a UPI screenshot:**
+
+Forward any payment confirmation screenshot → bot reads amount and merchant → shows category suggestion with Yes/No buttons → tap Yes to save, No to pick a different category.
+
+<img src="assets/screenshots/upi_flow.png" width="600"/>
+
+---
+
+**Type a quick expense:**
+
+```
+20 chai          → asks category if unknown, auto-logs if known
+chai 20          → same, both formats work
+599 recharge     → auto-categorised as Bills
+```
+<img src="assets/screenshots/text_expense.png" width="600"/>
+
+---
+
+### Commands
+
+| Command | What it does |
 |---|---|
-| 1st time | Ask once, cache for 7 days |
-| 3+ times in 7 days | Extend to 30 days |
-| 10+ times in 30 days | Extend to 90 days |
-| 20+ times in 90 days | Promoted to permanent DB — never asked again |
+| `/start` | Welcome message and instructions |
+| `/report` | Weekly spending summary with category breakdown |
+| `/dashboard` | Link to your personal interactive dashboard |
+| `/undo` | Remove the last logged transaction |
+| `/history` | View last 5 transactions with delete buttons |
+| `/clear` | Delete all your transactions and reset data |
 
-Built on Redis with TTL-based keys and frequency counters.
+<img src="assets/screenshots/commands.png" width="600"/><br>
+<img src="assets/screenshots/report.png" width="600"/>
+
+---
+
+### Dashboard
+
+Type `/dashboard` to get your personal link. Opens in browser with:
+
+- Category-wise spending pie chart
+- Monthly trend bar chart (last 3 months)
+- Top 5 merchants this month
+- Last 5 transactions
+
+<img src="assets/screenshots/dashboard.png" width="800"/>
 
 ---
 
@@ -39,158 +108,70 @@ Built on Redis with TTL-based keys and frequency counters.
 
 | Layer | Technology |
 |---|---|
-| WhatsApp Bot | Twilio WhatsApp API |
-| Backend | FastAPI + Uvicorn |
-| Task Queue | Celery + Redis |
-| Caching | Redis (TTL + frequency logic) |
-| Database | MySQL via SQLAlchemy |
-| OCR | EasyOCR + OpenCV |
-| PDF Parsing | PyMuPDF |
-| NLP | spaCy + Regex |
-| ML Categorization | Scikit-learn |
-| Dashboard | HTML + JS + Plotly |
-| File Storage | Cloudinary |
-| Deployment | Render |
+| **Backend** | FastAPI, Python 3.12 |
+| **Messaging** | python-telegram-bot 20.7, Twilio WhatsApp API |
+| **OCR** | OCR.space API |
+| **Image Processing** | OpenCV |
+| **Caching** | Redis (TTL-based merchant memory) |
+| **Database** | MySQL, SQLAlchemy |
+| **Task Processing** | FastAPI BackgroundTasks |
+| **Dashboard** | Plotly, HTML, CSS, JavaScript |
+| **Deployment** | Docker, Render |
+
+---
+
+## Architecture
+
+Incoming messages hit a FastAPI webhook — text commands are handled synchronously while UPI screenshots are offloaded to a background task. The background task downloads the image, sends it to OCR.space for text extraction, routes the result through app-specific parsers (GPay, PhonePe, Paytm, Amazon Pay), normalises into a standard transaction object, checks Redis for known merchants, and sends the result back via Telegram or WhatsApp. Transactions are persisted in MySQL on Aiven. The web dashboard reads directly from MySQL and renders with Plotly.
 
 ---
 
 ## Project Structure
 
 ```
-finbot/
+FINBOT/
 ├── app/
-│   ├── main.py                  # FastAPI entry point, Twilio webhook
-│   ├── config.py                # Env vars and settings
-│   ├── bot/                     # WhatsApp message handler and responder
-│   ├── parsers/                 # UPI, bill, PDF, text parsers
-│   ├── ocr/                     # OpenCV preprocessing + EasyOCR
-│   ├── cache/                   # Redis TTL cache + merchant promoter
-│   ├── ml/                      # Categorization model
-│   ├── intelligence/            # Habit detection, anomaly alerts, reports
-│   ├── tasks/                   # Celery async tasks
-│   ├── db/                      # SQLAlchemy models and CRUD
-│   ├── dashboard/               # Dashboard routes and Plotly charts
-│   └── utils/                   # Helpers — phone, date, image upload
-├── frontend/                    # Dashboard HTML/CSS/JS
-├── tests/                       # Pytest test suite
-├── sample_data/                 # Sample screenshots, bills, PDFs for testing
-├── scripts/                     # DB seed, ML training scripts
-├── .env.example                 # Env var template
-├── docker-compose.yml           # FastAPI + Redis + MySQL + Celery
-└── requirements.txt
+│   ├── bot/
+│   │   ├── telegram_handler.py      # Telegram webhook router
+│   │   ├── telegram_commands.py     # Command logic + category learning
+│   │   ├── telegram_keyboards.py    # Inline keyboard layouts
+│   │   ├── handler.py               # WhatsApp message router
+│   │   └── commands.py              # WhatsApp command logic
+│   ├── ocr/
+│   │   ├── extractor_ocrspace.py    # OCR.space API integration
+│   │   └── preprocessor.py          # Image preprocessing
+│   ├── parsers/upi/
+│   │   ├── gpay.py                  # GPay parser
+│   │   ├── phonepe.py               # PhonePe parser
+│   │   ├── paytm.py                 # Paytm parser
+│   │   ├── amazonpay.py             # Amazon Pay parser
+│   │   └── router.py                # Routes to correct parser
+│   ├── cache/
+│   │   ├── merchant_cache.py        # TTL-based Redis caching
+│   │   └── promoter.py              # Frequency-based DB promotion
+│   ├── dashboard/
+│   │   └── routes.py                # Dashboard API endpoints
+│   ├── intelligence/
+│   │   └── report_builder.py        # Weekly/monthly summary logic
+│   ├── db/
+│   │   ├── models.py                # SQLAlchemy models
+│   │   └── database.py              # DB connection
+│   └── main.py                      # FastAPI app, webhook endpoints
+├── frontend/
+│   ├── index.html
+│   ├── css/style.css
+│   └── js/
+│       ├── dashboard.js
+│       └── charts.js
+├── Dockerfile.web                   # Lightweight web service image
+├── Dockerfile.worker                # Full image with OCR dependencies
+└── requirements-web.txt             # Web service dependencies
 ```
 
 ---
 
-## Setup
+<div align="center">
 
-### 1. Clone and install
+Built by [Priyanshu Mallick](https://github.com/PriyanshuM04)
 
-```bash
-git clone https://github.com/PriyanshuM04/FINBOT.git
-cd FINBOT
-python -m venv .venv
-source .venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 2. Download spaCy model
-
-```bash
-python -m spacy download en_core_web_sm
-```
-
-### 3. Configure environment
-
-```bash
-cp .env.example .env
-# Fill in all values — see .env.example for required keys
-```
-
-### 4. Start services with Docker
-
-```bash
-docker-compose up -d
-```
-
-This starts MySQL, Redis, and the Celery worker together.
-
-### 5. Run the FastAPI server
-
-```bash
-uvicorn app.main:app --reload
-```
-
-### 6. Expose locally for Twilio (dev only)
-
-```bash
-ngrok http 8000
-# Copy the https URL → paste into Twilio WhatsApp sandbox webhook
-```
-
----
-
-## Environment Variables
-
-Create a `.env` file based on `.env.example`:
-
-```
-# Twilio
-TWILIO_ACCOUNT_SID=
-TWILIO_AUTH_TOKEN=
-TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
-
-# MySQL
-DATABASE_URL=mysql+pymysql://user:password@localhost:3306/finbot
-
-# Redis
-REDIS_URL=redis://localhost:6379/0
-
-# Cloudinary
-CLOUDINARY_CLOUD_NAME=
-CLOUDINARY_API_KEY=
-CLOUDINARY_API_SECRET=
-
-# App
-SECRET_KEY=your-secret-key-here
-ENVIRONMENT=development
-```
-
----
-
-## Build Phases
-
-| Phase | What gets built | Timeline |
-|---|---|---|
-| 1 | Core bot — text input, MySQL, Twilio webhook | Week 1–2 |
-| 2 | UPI screenshot parser (GPay, PhonePe, Paytm) | Week 3–4 |
-| 3 | Redis caching + merchant categorization | Week 5 |
-| 4 | Habit detection + anomaly alerts | Week 6 |
-| 5 | Web dashboard with Plotly | Week 7–8 |
-| 6 | PDF bank statement import | Week 9 |
-| 7 | Polish, deploy to Render, demo video | Week 10 |
-
----
-
-## Running Tests
-
-```bash
-pytest tests/ -v
-```
-
----
-
-## Why This Project
-
-- Solves a real Indian-context problem — UPI-dominant, cash-heavy, receipt-less spending culture  
-- Lives inside WhatsApp — zero app adoption barrier  
-- UPI screenshot parsing across multiple formats is a genuinely hard engineering problem  
-- Redis TTL caching with frequency-based promotion is real system design — strong interview topic  
-- Full pipeline: CV → NLP → caching → backend → database → frontend → deployment → bot  
-- Live demo in an interview: send a WhatsApp message and show the response in real time
-
----
-
-## License
-
-MIT
+</div>
