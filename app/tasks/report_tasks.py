@@ -3,7 +3,7 @@ Scheduled Celery tasks for automatic reports.
 Sunday weekly summary is sent to all active users.
 """
 from celery.schedules import crontab
-from app.tasks.celery_app import celery
+# from app.tasks.celery_app import celery
 from app.db.database import SessionLocal
 from app.db.models import User
 from app.intelligence.report_builder import get_weekly_summary
