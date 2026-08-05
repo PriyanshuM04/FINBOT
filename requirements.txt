@@ -22,11 +22,11 @@ opencv-python-headless==4.9.0.80
 
 # NLP & Parsing
 # spacy==3.7.4
-regex==2024.4.28
+regex>=2024.4.28
 
 # ML / Categorization
-scikit-learn==1.4.2
-numpy==1.26.4
+scikit-learn>=1.4.2
+numpy>=1.26.4
 joblib==1.4.0
 
 # Environment & Config
@@ -47,7 +47,7 @@ celery[redis]==5.4.0
 APScheduler==3.10.4
 
 #Utilities
-pillow==10.4.0
+pillow>=10.4.0
 python-dateutil==2.9.0
 phonenumbers==8.13.37
 aiofiles==23.2.1
